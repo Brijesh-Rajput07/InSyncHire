@@ -1,9 +1,5 @@
 # LOCATION: services/agent_service/agent_service/schemas/__init__.py
 
-"""Pydantic/dataclass schemas for the Agent Service: guardrail result
-types (guardrail_schemas.py) and example agent output models
-(agent_io_schemas.py) used to exercise them."""
-
 from .agent_io_schemas import (
     CodeAnalysisResult,
     CoPilotSuggestion,
@@ -25,6 +21,12 @@ from .guardrail_schemas import (
     hash_content,
 )
 from .ranking_schemas import CandidateProfileInput, JobOpeningInput
+from .interview_io_schemas import (
+    ComplexityAnalysisResult,
+    DifficultyCalibrationResult,
+    SandboxExecutionResult,
+    TranscriptFetchResult,
+)
 
 __all__ = [
     "CodeAnalysisResult", "SuggestedQuestion", "IntegritySignal", "CoPilotSuggestion",
@@ -32,4 +34,6 @@ __all__ = [
     "ActionTaken", "GuardrailCheckResult", "InputGuardrailResult", "OutputGuardrailResult",
     "BiasScanResult", "PIIScanResult", "FallbackDecision", "hash_content",
     "JobOpeningInput", "CandidateProfileInput",
+    "SandboxExecutionResult", "ComplexityAnalysisResult", "DifficultyCalibrationResult",
+    "TranscriptFetchResult",
 ]

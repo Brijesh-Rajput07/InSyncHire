@@ -4,57 +4,56 @@
 Live interview room WebSocket gateway (Section: STAGE 6 -- LIVE
 INTERVIEW ROOM; Section 10e).
 
-Handles the pieces of the live room that are pure message-routing +
-persistence, NOT the pieces that need real third-party infrastructure
-this milestone doesn't wire up yet:
+M9 built chat relay, the interim whole-document code editor relay +
+`code_snapshots` persistence, the `agent_event` emission PLUMBING
+(interviewer-only routing, no agent behind it yet), and session state
+transitions (SCHEDULED→IN_PROGRESS→COMPLETED). **M10 Slice 2** wires
+that plumbing to something real: `AgentBridge` (`agent_bridge.py`),
+which drives Agent Service's Graph 1 (M10 Slice 1) in-process. See that
+module's docstring for the in-process-vs-HTTP architectural decision
+and the "no real LLM provider wired in yet" flag.
 
-  - **Chat** (Section: "c. Text chat (WebSocket, role-gated)"): relayed
-    to every other connection on the session. `observer` is read-only
-    (Section: "Observer: silent room access ... Cannot chat") -- a
-    chat send from an observer connection is rejected with an
-    `error` message back to the sender, never relayed.
-  - **Collaborative code editor** (Section: "b. Collaborative code
-    editor (Monaco + Yjs CRDT over WebSocket + Redis pub/sub)"): *** THIS
-    IS AN INTERIM IMPLEMENTATION ***. A real Yjs CRDT integration
-    (binary y-protocol awareness/sync messages, operational-transform
-    merge semantics) is out of scope for this milestone -- what's
-    implemented here is a simplified "whole-document" relay: a
-    `code_update` message carries the editor's full current content,
-    which is broadcast verbatim to every other connection AND persisted
-    as the next `code_snapshots` row (Section: "code_snapshots: full
-    history with diffs — enables playback"). This is NOT
-    conflict-resolved the way real CRDT sync is -- two simultaneous
-    edits from different participants will race, with last-write-wins
-    semantics, rather than merging. Swapping in real Yjs sync (a
-    `y-websocket`-compatible binary relay) is a follow-up milestone;
-    this interim version is flagged the same way
-    `job_service.public_board_service` and
-    `agent_service.tools.rag_job_similarity_tool` flagged their own
-    interim implementations, and satisfies the SPIRIT of the feature
-    (participants see each other's edits live, full history is
-    persisted) at the boundary a client actually touches.
-  - **Agent event channel** (Section: "f. Interviewer Co-Pilot panel
-    ... never emitted to candidate" / "g. Live integrity signals panel
-    ... interviewer only"): the emission PLUMBING is built here (an
-    `agent_event` message type, routed to `interviewer`-role
-    connections only, via `Broadcaster.publish(..., only_roles={"interviewer"})`)
-    so the LangGraph interview pipeline (Graph 1, M10) has a channel to
-    publish into once it exists. No agent actually runs yet -- there is
-    no LLM call anywhere in this module. `agent_event` messages
-    received here are for testing/demo purposes only until M10 wires
-    a real emitter in.
-  - **Session state management**: the first STAFF connection (not a
-    candidate alone) transitions `interview_sessions.status` from
-    SCHEDULED to IN_PROGRESS and sets `started_at`; an explicit
-    `end_session` message (staff-only) transitions to COMPLETED, sets
-    `completed_at`, and publishes `interview.completed` to Kafka (the
-    topic/schema already existed in `insynchire-events` before this
-    milestone).
+New in this milestone:
+  - `code_update` now ALSO (after persisting the snapshot, unchanged
+    from M9) calls `AgentBridge.maybe_trigger_code_analysis()` --
+    debounced (Section: "last_meaningful_diff — debounced — not every
+    keystroke"). A real analysis result's `code_analysis_results` delta
+    and any `copilot_suggestions` delta are broadcast to `interviewer`-
+    role connections only, over `agent_event` (same routing M9 already
+    proved: never candidate, never observer).
+  - **`integrity_event`** (NEW message type) -- any connection may send
+    one (Section: "triggered by client-side events (tab-switch,
+    paste-burst) forwarded by Interview Service" -- typically the
+    candidate's own client, which is where that detection actually
+    runs). Routes through Graph 1's `integrity_node`; the resulting
+    signal (and any Rule-5.4 escalation flag) is broadcast to
+    `interviewer`-role connections only -- NEVER back to the sender,
+    even if the sender IS the interviewer (Section: "emits to
+    INTERVIEWER WebSocket only (never candidate or observer)").
+  - **`question_request`** (NEW, staff-only: interviewer/recruiter/
+    company_admin) -- triggers `question_strategist_node`; the
+    suggested question is broadcast to `interviewer`-role connections
+    only as a `human_approval_required` `agent_event`, pending a
+    `human_decision` message.
+  - **`phase_transition_request`** (NEW, staff-only) -- triggers
+    `phase_transition_node`; broadcasts a `human_approval_required`
+    `agent_event` (approval_type=PHASE_END) to interviewer-role
+    connections, pending confirmation.
+  - **`human_decision`** (NEW, staff-only) -- resumes whatever
+    interrupt is currently paused for this session (question/scorecard
+    approval, or phase-transition confirmation). The client is
+    responsible for sending the decision that matches the prompt it
+    was shown; this gateway does not track "which prompt is currently
+    pending" itself -- `AgentBridge`/Graph 1's own state does.
+  - A guardrail **fallback** (Rule 5.1) on ANY trigger is broadcast to
+    `interviewer`-role connections only, as `agent_event` type
+    `"fallback"` with the fixed "AI suggestions temporarily
+    unavailable" message -- never surfaced to the candidate, and never
+    treated as a WebSocket-level error (the session continues normally).
 
-Redis pub/sub (Section: "WebSocket message broker across multiple
-FastAPI instances") is NOT wired up -- see `broadcaster.py`'s module
-docstring for the explicit, documented gap and the drop-in replacement
-path.
+Everything M9 already built (chat, whole-document code relay +
+persistence, session state transitions, Redis-pub/sub gap) is
+UNCHANGED below except where explicitly noted.
 """
 
 from __future__ import annotations
@@ -68,9 +67,11 @@ from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 from insynchire_events import Topics
 from insynchire_events.schemas import InterviewCompletedEvent
 
+from .agent_bridge import AgentBridge
 from .broadcaster import InProcessBroadcaster
 from .connection_manager import Connection, SessionConnectionRegistry
 from .dependencies import (
+    get_agent_bridge,
     get_publish,
     get_tenant_resolver,
     get_ws_broadcaster,
@@ -89,6 +90,10 @@ CANDIDATE_ROLE = "candidate"
 OBSERVER_ROLE = "observer"
 STAFF_ROLES = {"company_admin", "recruiter", "interviewer", "observer"}
 SESSION_END_ALLOWED_ROLES = {"company_admin", "recruiter"}
+# M10 Slice 2: who may drive the agentic pipeline's staff-only actions.
+# Observer is deliberately excluded -- silent room access only
+# (Section: "Observer: silent room access ... Cannot inject questions").
+AGENT_CONTROL_ALLOWED_ROLES = {"company_admin", "recruiter", "interviewer"}
 
 WS_CLOSE_INVALID_TOKEN = 4401
 WS_CLOSE_SESSION_MISMATCH = 4403
@@ -103,6 +108,7 @@ async def interview_ws(
     registry: SessionConnectionRegistry = Depends(get_ws_registry),
     broadcaster: InProcessBroadcaster = Depends(get_ws_broadcaster),
     tenant_resolver: TenantResolver = Depends(get_tenant_resolver),
+    agent_bridge: AgentBridge = Depends(get_agent_bridge),
     publish=Depends(get_publish),
 ):
     try:
@@ -144,6 +150,7 @@ async def interview_ws(
                 connection=connection,
                 broadcaster=broadcaster,
                 tenant_resolver=tenant_resolver,
+                agent_bridge=agent_bridge,
                 publish=publish,
             )
     except WebSocketDisconnect:
@@ -158,10 +165,6 @@ async def interview_ws(
 async def _maybe_start_session(
     *, tenant_resolver: TenantResolver, broadcaster: InProcessBroadcaster, tenant_id: uuid.UUID, session_id: uuid.UUID
 ) -> None:
-    """A candidate connecting alone should never start the interview
-    clock; only a staff connection (interviewer/observer/recruiter/
-    company_admin) does. Idempotent -- only fires the transition once
-    (checks current status first)."""
     db_session, _ = await tenant_resolver.get_session_for_tenant_id(tenant_id)
     try:
         interview = await InterviewSessionRepository(db_session).get_by_id(session_id)
@@ -174,6 +177,24 @@ async def _maybe_start_session(
         await db_session.close()
 
 
+def _phase_for_session(interview) -> str:
+    """Maps `interview_sessions.status` (SCHEDULED/IN_PROGRESS/
+    COMPLETED/CANCELLED) onto Graph 1's `phase` field (WAITING/
+    IN_PROGRESS/CODING_ROUND/SYSTEM_DESIGN_ROUND/WRAP_UP/COMPLETED).
+    This is an interim, coarse mapping -- M10 Slice 1's `phase_history`
+    tracks the finer-grained CODING_ROUND/SYSTEM_DESIGN_ROUND/WRAP_UP
+    distinctions once a `phase_transition_request` has been used at
+    least once; before that, a session that's IN_PROGRESS is treated as
+    CODING_ROUND by default (the common case), not the more generic
+    IN_PROGRESS, so `code_analysis_node`'s trigger routing (which only
+    special-cases WAITING) behaves correctly from the start."""
+    if interview is None or interview.status == "SCHEDULED":
+        return "WAITING"
+    if interview.status == "COMPLETED":
+        return "COMPLETED"
+    return "CODING_ROUND"
+
+
 async def _handle_message(
     message: dict[str, Any],
     *,
@@ -184,6 +205,7 @@ async def _handle_message(
     connection: Connection,
     broadcaster: InProcessBroadcaster,
     tenant_resolver: TenantResolver,
+    agent_bridge: AgentBridge,
     publish,
 ) -> None:
     message_type = message.get("type")
@@ -196,10 +218,29 @@ async def _handle_message(
     elif message_type == "code_update":
         await _handle_code_update(
             message, session_id=session_id, tenant_id=tenant_id, connection=connection,
-            broadcaster=broadcaster, tenant_resolver=tenant_resolver,
+            broadcaster=broadcaster, tenant_resolver=tenant_resolver, agent_bridge=agent_bridge,
         )
     elif message_type == "agent_event":
         await _handle_agent_event(message, session_id=session_id, broadcaster=broadcaster)
+    elif message_type == "integrity_event":
+        await _handle_integrity_event(
+            message, session_id=session_id, tenant_id=tenant_id, connection=connection,
+            broadcaster=broadcaster, tenant_resolver=tenant_resolver, agent_bridge=agent_bridge,
+        )
+    elif message_type == "question_request":
+        await _handle_question_request(
+            message, session_id=session_id, tenant_id=tenant_id, connection=connection,
+            broadcaster=broadcaster, tenant_resolver=tenant_resolver, agent_bridge=agent_bridge,
+        )
+    elif message_type == "phase_transition_request":
+        await _handle_phase_transition_request(
+            message, session_id=session_id, tenant_id=tenant_id, connection=connection,
+            broadcaster=broadcaster, tenant_resolver=tenant_resolver, agent_bridge=agent_bridge,
+        )
+    elif message_type == "human_decision":
+        await _handle_human_decision(
+            message, session_id=session_id, connection=connection, broadcaster=broadcaster, agent_bridge=agent_bridge,
+        )
     elif message_type == "end_session":
         await _handle_end_session(
             session_id=session_id, tenant_id=tenant_id, role_in_session=role_in_session,
@@ -226,11 +267,16 @@ async def _handle_chat(
          "body": message.get("body", "")},
         exclude_connection=connection,
     )
+    # *** KNOWN GAP, UNCHANGED FROM M9/documented in agent_service's
+    # fetch_session_transcript_tool.py: this message is still not
+    # persisted anywhere. See that tool's module docstring for the
+    # recommended FIX-M9 (a chat_messages table) -- not applied here
+    # without explicit confirmation, per that same docstring.
 
 
 async def _handle_code_update(
     message: dict[str, Any], *, session_id: uuid.UUID, tenant_id: uuid.UUID, connection: Connection,
-    broadcaster: InProcessBroadcaster, tenant_resolver: TenantResolver,
+    broadcaster: InProcessBroadcaster, tenant_resolver: TenantResolver, agent_bridge: AgentBridge,
 ) -> None:
     content = message.get("content", "")
     language = message.get("language")
@@ -243,6 +289,7 @@ async def _handle_code_update(
             tenant_id=tenant_id, session_id=session_id, content=content, language=language,
             diff_from_prev=None if previous is None else _naive_diff(previous.content, content),
         )
+        interview = await InterviewSessionRepository(db_session).get_by_id(session_id)
         await db_session.commit()
     finally:
         await db_session.close()
@@ -256,25 +303,35 @@ async def _handle_code_update(
         exclude_connection=connection,
     )
 
+    # M10 Slice 2: (debounced) trigger Graph 1's code_analysis_node +
+    # its parallel copilot_node fan-out. Unassigned candidate/staff
+    # user_ids are collected loosely here -- Graph 1 doesn't use them
+    # for anything beyond identity bookkeeping in this slice.
+    interviewer_ids = [uuid.UUID(i) for i in (interview.interviewer_ids if interview else [])]
+    candidate_user_id = interview.candidate_user_id if interview else None
+    current_question = message.get("current_question")  # client may include the active question's test_cases
+
+    result = await agent_bridge.maybe_trigger_code_analysis(
+        session_id=session_id, tenant_id=tenant_id, candidate_user_id=candidate_user_id,
+        interviewer_ids=interviewer_ids, phase=_phase_for_session(interview),
+        current_code=content, current_language=language or "", current_question=current_question,
+    )
+    if result is None:
+        return  # debounced -- no analysis this round
+
+    await _broadcast_trigger_result(result, session_id=session_id, broadcaster=broadcaster)
+
 
 def _naive_diff(before: str, after: str) -> str:
-    """Deliberately minimal -- a real diff algorithm (difflib, or the
-    real Yjs update encoding once that's wired in) is not needed for
-    this milestone's playback-history purpose; storing the raw
-    before/after lengths is enough to prove `diff_from_prev` is
-    populated without pulling in a diff library for an interim
-    implementation. Replace when real Yjs sync lands."""
     return f"len {len(before)} -> {len(after)}"
 
 
 async def _handle_agent_event(
     message: dict[str, Any], *, session_id: uuid.UUID, broadcaster: InProcessBroadcaster
 ) -> None:
-    """Section: Co-Pilot/Integrity events are emitted to the
-    INTERVIEWER WebSocket only -- never candidate, never observer, and
-    (per the plan's own wording, "interviewer WebSocket panel only")
-    not even company_admin/recruiter. No agent actually produced this
-    event yet (M10) -- this handler only proves the routing is correct."""
+    """UNCHANGED from M9 -- kept for any manual/test-only agent_event
+    sends. Real agent output now flows through `_broadcast_trigger_result`
+    instead of this passthrough."""
     await broadcaster.publish(
         session_id,
         {"type": "agent_event", "event_type": message.get("event_type"), "payload": message.get("payload")},
@@ -282,16 +339,200 @@ async def _handle_agent_event(
     )
 
 
-def _as_aware_utc(dt: datetime) -> datetime:
-    """Some DB drivers (notably SQLite, used in this repo's tests) don't
-    round-trip timezone info even on a `DateTime(timezone=True)` column
-    the way Postgres does -- they hand back a naive datetime. We always
-    stored these as UTC, so a naive value is assumed to already be UTC.
-    Same helper/rationale as `tenant_service.invite_acceptance_service`'s
-    `_as_aware_utc`."""
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt
+async def _broadcast_trigger_result(result, *, session_id: uuid.UUID, broadcaster: InProcessBroadcaster) -> None:
+    """Turns an `InterviewTriggerResult` (agent_service) into the
+    `agent_event` messages M9's routing already guarantees reach
+    `interviewer`-role connections only (Section: Co-Pilot/Integrity
+    "never emitted to candidate" / "interviewer only"). Never sent to
+    the connection that CAUSED the trigger unless that connection is
+    itself an interviewer (Rule 5.1's fallback message is exactly the
+    kind of thing an interviewer should see regardless of who typed
+    the code that triggered it)."""
+    if result.fallback_reason:
+        await broadcaster.publish(
+            session_id,
+            {"type": "agent_event", "event_type": "fallback", "payload": {"message": "AI suggestions temporarily unavailable"}},
+            only_roles={"interviewer"},
+        )
+        return
+
+    state = result.state
+
+    if state.get("code_analysis_results"):
+        await broadcaster.publish(
+            session_id,
+            {"type": "agent_event", "event_type": "code_analyzed", "payload": state["code_analysis_results"][-1]},
+            only_roles={"interviewer"},
+        )
+    if state.get("copilot_suggestions"):
+        await broadcaster.publish(
+            session_id,
+            {"type": "agent_event", "event_type": "copilot_suggestion", "payload": state["copilot_suggestions"][-1]},
+            only_roles={"interviewer"},
+        )
+    if state.get("integrity_signals") and state["integrity_signals"]:
+        await broadcaster.publish(
+            session_id,
+            {"type": "agent_event", "event_type": "integrity_flagged", "payload": state["integrity_signals"][-1]},
+            only_roles={"interviewer"},
+        )
+
+    if result.awaiting_human_approval and result.human_approval_type in ("QUESTION", "SCORECARD"):
+        payload_key = "suggested_question" if result.human_approval_type == "QUESTION" else "scorecard"
+        await broadcaster.publish(
+            session_id,
+            {
+                "type": "agent_event", "event_type": "human_approval_required",
+                "payload": {"approval_type": result.human_approval_type, payload_key: state.get(payload_key)},
+            },
+            only_roles={"interviewer"},
+        )
+    elif result.human_approval_type == "PHASE_END" or state.get("pending_phase"):
+        # phase_transition_request's own handler also emits this
+        # explicitly (see below) -- this branch covers the case where
+        # a caller reaches here some other way in the future.
+        await broadcaster.publish(
+            session_id,
+            {
+                "type": "agent_event", "event_type": "human_approval_required",
+                "payload": {"approval_type": "PHASE_END", "next_phase": state.get("pending_phase")},
+            },
+            only_roles={"interviewer"},
+        )
+    elif result.human_approval_type == "INTEGRITY_REVIEW":
+        await broadcaster.publish(
+            session_id,
+            {
+                "type": "agent_event", "event_type": "integrity_escalation",
+                "payload": {"signal_count": len(state.get("integrity_signals", []))},
+            },
+            only_roles={"interviewer"},
+        )
+
+
+async def _handle_integrity_event(
+    message: dict[str, Any], *, session_id: uuid.UUID, tenant_id: uuid.UUID, connection: Connection,
+    broadcaster: InProcessBroadcaster, tenant_resolver: TenantResolver, agent_bridge: AgentBridge,
+) -> None:
+    """Section: "triggered by client-side events (tab-switch,
+    paste-burst) forwarded by Interview Service" -- ANY connection may
+    send this (typically the candidate's own client), since the
+    detection itself runs client-side; the RESULT is still only ever
+    broadcast to interviewer connections (`_broadcast_trigger_result`),
+    never echoed back to the sender."""
+    db_session, _ = await tenant_resolver.get_session_for_tenant_id(tenant_id)
+    try:
+        interview = await InterviewSessionRepository(db_session).get_by_id(session_id)
+    finally:
+        await db_session.close()
+
+    interviewer_ids = [uuid.UUID(i) for i in (interview.interviewer_ids if interview else [])]
+    candidate_user_id = interview.candidate_user_id if interview else None
+
+    result = await agent_bridge.trigger_integrity_event(
+        session_id=session_id, tenant_id=tenant_id, candidate_user_id=candidate_user_id,
+        interviewer_ids=interviewer_ids, phase=_phase_for_session(interview),
+        event_type=message.get("event_type", "unknown"),
+        confidence_score=float(message.get("confidence_score", 0.5)),
+        raw_signal_data=str(message.get("raw_signal_data", "")),
+    )
+    await _broadcast_trigger_result(result, session_id=session_id, broadcaster=broadcaster)
+
+
+async def _handle_question_request(
+    message: dict[str, Any], *, session_id: uuid.UUID, tenant_id: uuid.UUID, connection: Connection,
+    broadcaster: InProcessBroadcaster, tenant_resolver: TenantResolver, agent_bridge: AgentBridge,
+) -> None:
+    if connection.role_in_session not in AGENT_CONTROL_ALLOWED_ROLES:
+        await connection.websocket.send_json({"type": "error", "detail": "Only interviewer/recruiter/company_admin may request a question suggestion"})
+        return
+
+    db_session, _ = await tenant_resolver.get_session_for_tenant_id(tenant_id)
+    try:
+        interview = await InterviewSessionRepository(db_session).get_by_id(session_id)
+    finally:
+        await db_session.close()
+
+    interviewer_ids = [uuid.UUID(i) for i in (interview.interviewer_ids if interview else [])]
+    candidate_user_id = interview.candidate_user_id if interview else None
+
+    result = await agent_bridge.trigger_question_request(
+        session_id=session_id, tenant_id=tenant_id, candidate_user_id=candidate_user_id,
+        interviewer_ids=interviewer_ids, phase=_phase_for_session(interview),
+        topic_tags=message.get("topic_tags"), current_question=message.get("current_question"),
+    )
+    await _broadcast_trigger_result(result, session_id=session_id, broadcaster=broadcaster)
+
+
+async def _handle_phase_transition_request(
+    message: dict[str, Any], *, session_id: uuid.UUID, tenant_id: uuid.UUID, connection: Connection,
+    broadcaster: InProcessBroadcaster, tenant_resolver: TenantResolver, agent_bridge: AgentBridge,
+) -> None:
+    if connection.role_in_session not in AGENT_CONTROL_ALLOWED_ROLES:
+        await connection.websocket.send_json({"type": "error", "detail": "Only interviewer/recruiter/company_admin may request a phase transition"})
+        return
+
+    next_phase = message.get("next_phase")
+    if not next_phase:
+        await connection.websocket.send_json({"type": "error", "detail": "Missing 'next_phase'"})
+        return
+
+    db_session, _ = await tenant_resolver.get_session_for_tenant_id(tenant_id)
+    try:
+        interview = await InterviewSessionRepository(db_session).get_by_id(session_id)
+    finally:
+        await db_session.close()
+
+    interviewer_ids = [uuid.UUID(i) for i in (interview.interviewer_ids if interview else [])]
+    candidate_user_id = interview.candidate_user_id if interview else None
+
+    result = await agent_bridge.trigger_phase_transition_request(
+        session_id=session_id, tenant_id=tenant_id, candidate_user_id=candidate_user_id,
+        interviewer_ids=interviewer_ids, phase=_phase_for_session(interview), next_phase=next_phase,
+    )
+    # This trigger always pauses at phase_transition_node -- emit the
+    # confirmation prompt explicitly (result.human_approval_type is not
+    # set by Graph 1 for this interrupt, since phase_transition_node
+    # isn't approval_type-branched the way human_approval_node is).
+    await broadcaster.publish(
+        session_id,
+        {"type": "agent_event", "event_type": "human_approval_required", "payload": {"approval_type": "PHASE_END", "next_phase": next_phase}},
+        only_roles={"interviewer"},
+    )
+
+
+async def _handle_human_decision(
+    message: dict[str, Any], *, session_id: uuid.UUID, connection: Connection,
+    broadcaster: InProcessBroadcaster, agent_bridge: AgentBridge,
+) -> None:
+    if connection.role_in_session not in AGENT_CONTROL_ALLOWED_ROLES:
+        await connection.websocket.send_json({"type": "error", "detail": "Only interviewer/recruiter/company_admin may resolve an approval"})
+        return
+
+    decision = message.get("decision")
+    if decision not in ("APPROVED", "EDITED", "REJECTED", "CONFIRMED"):
+        await connection.websocket.send_json({"type": "error", "detail": f"Invalid decision '{decision}'"})
+        return
+
+    try:
+        result = await agent_bridge.resume_human_decision(session_id=session_id, decision=decision)
+    except Exception as exc:  # noqa: BLE001 -- e.g. InterviewRunNotFoundError if nothing was ever paused
+        await connection.websocket.send_json({"type": "error", "detail": str(exc)})
+        return
+
+    if result.state.get("phase") is not None and message.get("_phase_transition_confirmed_broadcast", True):
+        # Phase actually changed (or didn't) -- let everyone in the
+        # room know the current phase, not just the interviewer, since
+        # phase affects what all participants see (Section: session
+        # phase state machine is room-wide, not interviewer-only).
+        await broadcaster.publish(session_id, {"type": "phase_changed", "phase": result.state["phase"]})
+
+    await _broadcast_trigger_result(result, session_id=session_id, broadcaster=broadcaster)
+    if result.state.get("current_question"):
+        # A newly-approved question should reach EVERYONE in the room
+        # (candidate needs to see it too), unlike Co-Pilot/Integrity
+        # which stay interviewer-only.
+        await broadcaster.publish(session_id, {"type": "question_injected", "question": result.state["current_question"]})
 
 
 async def _handle_end_session(
@@ -331,3 +572,16 @@ async def _handle_end_session(
     )
 
     await broadcaster.publish(session_id, {"type": "session_completed"})
+    # NOTE: triggering Graph 1's SESSION_COMPLETED (report_synthesis_node)
+    # here is deliberately NOT done in this slice -- full Report
+    # Synthesis Agent wiring (scorecard approval workflow, PDF export,
+    # `scorecard.generated` publish) is explicitly Milestone M11's job
+    # (Section 4 build order). Triggering it from end_session with only
+    # a placeholder LLM (see agent_bridge.py) would produce a scorecard
+    # that looks real but isn't -- worse than not producing one yet.
+
+
+def _as_aware_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
