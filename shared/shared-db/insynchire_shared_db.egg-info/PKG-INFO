@@ -1,0 +1,10 @@
+Metadata-Version: 2.4
+Name: insynchire-shared-db
+Version: 0.1.0
+Summary: Shared async DB helpers (engine/session factories, RLS activation, GUID type, connection-string crypto) for InSyncHire microservices
+Requires-Python: >=3.11
+Requires-Dist: sqlalchemy[asyncio]>=2.0
+Requires-Dist: cryptography>=42.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: aiosqlite>=0.20; extra == "dev"

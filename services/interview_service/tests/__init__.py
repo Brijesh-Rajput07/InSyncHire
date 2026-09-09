@@ -1,0 +1,1 @@
+# LOCATION: services/interview_service/tests/__init__.py

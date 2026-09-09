@@ -1,0 +1,12 @@
+Metadata-Version: 2.4
+Name: insynchire-auth-tokens
+Version: 0.1.0
+Summary: Shared encrypted-payload RS256 token issuance/verification for InSyncHire microservices
+Requires-Python: >=3.11
+Requires-Dist: pydantic>=2.6
+Requires-Dist: pyjwt[crypto]>=2.9
+Requires-Dist: cryptography>=42.0
+Requires-Dist: redis>=5.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: fakeredis>=2.23; extra == "dev"

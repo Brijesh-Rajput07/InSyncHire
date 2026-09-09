@@ -1,0 +1,23 @@
+# LOCATION: services/agent_service/pyproject.toml
+
+[project]
+name = "insynchire-agent-service"
+version = "0.1.0"
+description = "Agent Service: LangGraph agent nodes + GuardrailService (5-layer defense-in-depth for InSyncHire's hiring AI) (InSyncHire M6)"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.6",
+    "langgraph>=0.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["agent_service*"]

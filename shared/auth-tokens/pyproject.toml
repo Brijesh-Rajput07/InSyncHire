@@ -1,0 +1,26 @@
+# LOCATION: shared/auth-tokens/pyproject.toml
+
+[project]
+name = "insynchire-auth-tokens"
+version = "0.1.0"
+description = "Shared encrypted-payload RS256 token issuance/verification for InSyncHire microservices"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.6",
+    "pyjwt[crypto]>=2.9",
+    "cryptography>=42.0",
+    "redis>=5.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "fakeredis>=2.23",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["auth_tokens*"]

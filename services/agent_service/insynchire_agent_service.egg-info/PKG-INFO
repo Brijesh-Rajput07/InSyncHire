@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: insynchire-agent-service
+Version: 0.1.0
+Summary: Agent Service: LangGraph agent nodes + GuardrailService (5-layer defense-in-depth for InSyncHire's hiring AI) (InSyncHire M6)
+Requires-Python: >=3.11
+Requires-Dist: pydantic>=2.6
+Requires-Dist: langgraph>=0.2
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"

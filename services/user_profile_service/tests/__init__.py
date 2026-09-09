@@ -1,0 +1,1 @@
+# LOCATION: services/user_profile_service/tests/__init__.py

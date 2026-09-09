@@ -1,0 +1,9 @@
+pyproject.toml
+insynchire_permissions.egg-info/PKG-INFO
+insynchire_permissions.egg-info/SOURCES.txt
+insynchire_permissions.egg-info/dependency_links.txt
+insynchire_permissions.egg-info/requires.txt
+insynchire_permissions.egg-info/top_level.txt
+permissions/__init__.py
+permissions/matrix.py
+tests/test_matrix.py

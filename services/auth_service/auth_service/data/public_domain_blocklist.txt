@@ -1,0 +1,52 @@
+# LOCATION: services/auth_service/auth_service/data/public_domain_blocklist.txt
+# One domain per line, lowercase. Extend this list over time (Section
+# 10d says "200+ others" -- this is a practical starter set covering
+# the most common public webmail/consumer providers; add more as you
+# encounter signup attempts using them).
+gmail.com
+googlemail.com
+yahoo.com
+yahoo.co.uk
+yahoo.co.in
+outlook.com
+hotmail.com
+hotmail.co.uk
+live.com
+msn.com
+protonmail.com
+proton.me
+icloud.com
+me.com
+mac.com
+aol.com
+zoho.com
+gmx.com
+gmx.net
+mail.com
+yandex.com
+yandex.ru
+rediffmail.com
+inbox.com
+fastmail.com
+tutanota.com
+hushmail.com
+rocketmail.com
+qq.com
+163.com
+126.com
+sina.com
+naver.com
+web.de
+t-online.de
+libero.it
+seznam.cz
+mail.ru
+comcast.net
+verizon.net
+att.net
+sbcglobal.net
+cox.net
+btinternet.com
+sky.com
+talktalk.net
+virginmedia.com

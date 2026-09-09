@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: insynchire-permissions
+Version: 0.1.0
+Summary: Canonical PERMISSION_MATRIX (FIX-M3) - single source of truth for role enforcement across all InSyncHire services
+Requires-Python: >=3.11
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"

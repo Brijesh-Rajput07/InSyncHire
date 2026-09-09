@@ -1,0 +1,23 @@
+# LOCATION: shared/insynchire-events/pyproject.toml
+
+[project]
+name = "insynchire-events"
+version = "0.1.0"
+description = "Internal Kafka event contract package for InSyncHire microservices"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.6",
+    "aiokafka>=0.10",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["insynchire_events*"]

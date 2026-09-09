@@ -1,0 +1,32 @@
+# LOCATION: services/agent_service/agent_service/colang/config.yml
+#
+# NeMo Guardrails (NVIDIA, open-source) top-level config skeleton
+# (Section: GUARDRAILS ARCHITECTURE -- "TOOL: NeMo Guardrails ... for
+# behavioral/conversational constraints + custom validation layer for
+# domain-specific rules").
+#
+# This is a CONFIG SKELETON, not a wired-up runtime dependency for M6 --
+# the `nemoguardrails` package itself is deliberately not a hard
+# dependency of this service yet (it's a heavy install with its own
+# LLM-provider config). The custom GuardrailService (Python, this
+# package) implements every rule natively so the 5 layers are fully
+# testable without it. When NeMo Guardrails is wired in for real
+# (interview pipeline, M10), point `nemoguardrails.RailsConfig.from_path`
+# at this `colang/` directory.
+
+models:
+  - type: main
+    engine: openai
+    model: gpt-4o-mini
+    # Real deployment: point at whichever LLM provider/model the rest
+    # of the agent nodes use -- kept generic here since M6 has no live
+    # LLM call yet.
+
+rails:
+  input:
+    flows:
+      - candidate data is untrusted
+  output:
+    flows:
+      - agent cannot auto-hire
+      - agent cannot reference demographics

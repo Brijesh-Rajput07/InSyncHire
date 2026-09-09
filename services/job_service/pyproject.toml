@@ -1,0 +1,32 @@
+# LOCATION: services/job_service/pyproject.toml
+
+[project]
+name = "insynchire-job-service"
+version = "0.1.0"
+description = "Job Service: job posting CRUD, application submission, interim public job board (InSyncHire M5)"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.29",
+    "cryptography>=42.0",
+    "pyjwt[crypto]>=2.9",
+    "redis>=5.0",
+    "pydantic[email]>=2.6",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "aiosqlite>=0.20",
+    "fakeredis>=2.23",
+    "httpx>=0.27",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["job_service*"]

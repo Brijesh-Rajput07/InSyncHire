@@ -1,0 +1,19 @@
+Metadata-Version: 2.4
+Name: insynchire-tenant-service
+Version: 0.1.0
+Summary: Tenant Service: bootstraps company_admin, user invites, tenant selection (InSyncHire M3)
+Requires-Python: >=3.11
+Requires-Dist: fastapi>=0.115
+Requires-Dist: uvicorn[standard]>=0.30
+Requires-Dist: sqlalchemy[asyncio]>=2.0
+Requires-Dist: asyncpg>=0.29
+Requires-Dist: cryptography>=42.0
+Requires-Dist: pyjwt[crypto]>=2.9
+Requires-Dist: redis>=5.0
+Requires-Dist: dnspython>=2.6
+Requires-Dist: pydantic[email]>=2.6
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: aiosqlite>=0.20; extra == "dev"
+Requires-Dist: fakeredis>=2.23; extra == "dev"
+Requires-Dist: httpx>=0.27; extra == "dev"

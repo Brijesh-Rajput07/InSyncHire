@@ -1,0 +1,12 @@
+Metadata-Version: 2.4
+Name: insynchire-notification-service
+Version: 0.1.0
+Summary: Notification Service: headless Kafka consumer, sends email for notification-relevant events (InSyncHire M7)
+Requires-Python: >=3.11
+Requires-Dist: sqlalchemy[asyncio]>=2.0
+Requires-Dist: asyncpg>=0.29
+Requires-Dist: cryptography>=42.0
+Requires-Dist: pydantic[email]>=2.6
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: aiosqlite>=0.20; extra == "dev"

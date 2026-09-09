@@ -1,0 +1,27 @@
+# LOCATION: services/migration_service/pyproject.toml
+
+[project]
+name = "insynchire-migration-service"
+version = "0.1.0"
+description = "Headless Kafka consumer that provisions tenant databases (InSyncHire M1)"
+requires-python = ">=3.11"
+dependencies = [
+    "sqlalchemy[asyncio]>=2.0",
+    "alembic>=1.13",
+    "asyncpg>=0.29",
+    "psycopg2-binary>=2.9",
+    "cryptography>=42.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "aiosqlite>=0.20",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["migration_service*"]
